@@ -25,6 +25,7 @@ Author: TABARC-Code. Checked against arXiv 2603.01092 (v3, 21 Oct 2026, NeurIPS 
 - Score at beta: (1 - beta) x coherence/3 + beta x (1 - availability). The paper's own beta formulation was not checked; this is the same idea, not a copy.
 - Strictly-novel filter applied to every ranked triple.
 - Controls (default 30% of the pool, drawn evenly from higher-availability triples) and the half-versus-half coherence diagnostic. The paper compares against LLM baselines; this is a cheap in-corpus stand-in.
+- Two-judge agreement statistics (exact agreement, within one point, mean spread, disputed triples) and the tagging overlap check (per-document and per-atom Jaccard). The paper compares against human raters and LLM baselines; these are cheap in-corpus stand-ins.
 - Blacklist, unanchored cap and collapse flag: feedback and safety rules of the skill, enforced in the script.
 
 If a later run of this skill shows these choices matter, change them here and in the script header together.

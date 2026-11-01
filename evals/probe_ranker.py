@@ -316,6 +316,112 @@ rc, _, err, _ = run_fb(SCORED, dec({"key": T3, "verdict": "kill", "reason": "obv
                        ledger_text=hist)
 check("fb_no_false_three_round_warning", rc == 0 and "three rounds running" not in err)
 
+# --- several judges -----------------------------------------------------------
+def with_judges(js, **extra):
+    d = copy.deepcopy(BASE)
+    d["judges"] = js
+    d.update(extra)
+    return d
+
+
+rc, out, _ = run("rank", with_judges({"A": {T1: 3, T2: 2, T3: 3}, "B": {T1: 2, T2: 2, T3: 3}}),
+                 ["--gate", "0"])
+rows = {r["key"]: r for r in parse(out)} if rc == 0 else {}
+check("judges_use_lowest_score_by_default",
+      rows.get(T1, {}).get("coherence") == 2 and rows.get(T3, {}).get("coherence") == 3)
+check("judges_rows_carry_each_judges_score",
+      rows.get(T1, {}).get("judge_scores") == {"A": 3, "B": 2})
+rc, out, _ = run("rank", with_judges({"A": {T1: 3, T2: 2, T3: 3}, "B": {T1: 2, T2: 2, T3: 3}}),
+                 ["--gate", "0", "--combine", "mean"])
+rows = {r["key"]: r for r in parse(out)} if rc == 0 else {}
+check("judges_combine_mean", rows.get(T1, {}).get("coherence") == 2.5)
+
+rc, out, _ = run("rank", with_judges({"A": {T1: 3, T2: 2, T3: 1}, "B": {T1: 3, T2: 3, T3: 3}}),
+                 ["--gate", "0"])
+dg = json.loads(out)["diagnostics"] if rc == 0 else {}
+check("judges_report_agreement",
+      dg.get("judge_exact_agreement") == 0.333 and dg.get("judge_within_one") == 0.667
+      and dg.get("judge_mean_spread") == 1.0)
+check("judges_flag_disputed_triples",
+      dg.get("judge_disputed") == [T3] and "unresolved" in (dg.get("judge_note") or ""))
+rc, out, _ = run("rank", with_judges({"A": {T1: 3, T2: 2, T3: 3}, "B": {T1: 3, T2: 2, T3: 3}}))
+dg = json.loads(out)["diagnostics"] if rc == 0 else {}
+check("judges_agree_note_when_identical",
+      dg.get("judge_exact_agreement") == 1.0 and dg.get("judge_note") == "judges broadly agree")
+rc, out, _ = run("rank", with_judges({"A": {T1: 3}, "B": {T1: 3}}, unanchored=True))
+check("judges_unanchored_cap_still_applies",
+      rc == 0 and [r["coherence"] for r in parse(out)] == [2])
+
+rc, err = run("rank", with_judges({"A": {T1: 3}, "B": {T1: 3}}, coherence={T1: 3}))[0::2]
+check("reject_judges_and_coherence_together", clean_reject(rc, err, "not both"))
+rc, err = run("rank", with_judges({"A": {T1: 3}}))[0::2]
+check("reject_a_single_judge", clean_reject(rc, err, "at least two"))
+rc, err = run("rank", with_judges({"A": {T1: 3, T2: 2}, "B": {T1: 3}}))[0::2]
+check("reject_judges_scoring_different_triples", clean_reject(rc, err, "same triples"))
+rc, err = run("rank", with_judges({"A": {T1: 3}, "B": {T1: 7}}))[0::2]
+check("reject_judge_score_out_of_range", clean_reject(rc, err, "0 to 3"))
+rc, err = run("rank", with_coh({T1: 3}), ["--combine", "mean"])[0::2]
+check("reject_combine_without_judges", clean_reject(rc, err, "judges"))
+
+rc, _, _, f = run_fb(with_judges({"A": {T1: 3, T3: 2}, "B": {T1: 2, T3: 3}}),
+                     dec({"key": T1, "verdict": "keep"}))
+nxt = json.loads(f["out"]) if rc == 0 else {}
+check("fb_clears_judges_too", rc == 0 and nxt.get("judges") == {} and nxt.get("coherence") == {})
+
+# --- tagging check --------------------------------------------------------------
+TC = {"atoms": list("abcdef"),
+      "docs": {"d1": ["a", "b"], "d2": ["c", "d"], "d3": ["e", "f"]},
+      "docs_second": {"d1": ["a", "b"], "d2": ["c", "e"], "d3": ["a", "f"]}}
+same = copy.deepcopy(TC)
+same["docs_second"] = copy.deepcopy(same["docs"])
+rc, out, _ = run("tagcheck", same)
+tj = json.loads(out) if rc == 0 else {}
+check("tagcheck_identical_taggers_agree",
+      tj.get("mean_jaccard") == 1.0 and tj.get("low_agreement_docs") == []
+      and tj.get("verdict") == "taggers broadly agree")
+rc, out, _ = run("tagcheck", TC)
+tj = json.loads(out) if rc == 0 else {}
+low = {r["doc"]: r for r in tj.get("low_agreement_docs", [])}
+check("tagcheck_flags_low_agreement_documents",
+      set(low) == {"d2", "d3"} and low["d2"]["only_first"] == ["d"]
+      and low["d2"]["only_second"] == ["e"])
+aw = tj.get("atoms_worst_first", [])
+check("tagcheck_lists_worst_atoms_first",
+      [r["jaccard"] for r in aw] == sorted(r["jaccard"] for r in aw)
+      and [r["atom"] for r in aw[:2]] == ["d", "e"])
+check("tagcheck_verdict_says_reconcile_when_low",
+      "reconcile" in tj.get("verdict", ""))
+rc, out, _ = run("tagcheck", TC, ["--min-jaccard", "0.5"])
+check("tagcheck_threshold_changes_verdict",
+      rc == 0 and json.loads(out)["verdict"] == "taggers broadly agree")
+obj2 = copy.deepcopy(TC)
+obj2["docs_second"] = {k: {"atoms": v, "source": "S"} for k, v in TC["docs_second"].items()}
+rc, out, _ = run("tagcheck", obj2)
+check("tagcheck_accepts_object_form", rc == 0 and json.loads(out)["documents"] == 3)
+
+noset = copy.deepcopy(TC)
+del noset["docs_second"]
+rc, err = run("tagcheck", noset)[0::2]
+check("tagcheck_needs_a_second_tagging", clean_reject(rc, err, "docs_second"))
+mism = copy.deepcopy(TC)
+del mism["docs_second"]["d3"]
+rc, err = run("tagcheck", mism)[0::2]
+check("tagcheck_rejects_different_document_sets", clean_reject(rc, err, "same documents"))
+unk = copy.deepcopy(TC)
+unk["docs_second"]["d1"] = ["a", "zzz"]
+rc, err = run("tagcheck", unk)[0::2]
+check("tagcheck_rejects_unknown_atoms_in_second", clean_reject(rc, err, "not in"))
+rc, err = run("tagcheck", TC, ["--min-jaccard", "1.5"])[0::2]
+check("tagcheck_rejects_bad_threshold", clean_reject(rc, err, "min-jaccard"))
+
+fbt = copy.deepcopy(SCORED)
+fbt["docs_second"] = copy.deepcopy(SCORED["docs"])
+rc, _, _, f = run_fb(fbt, dec({"key": T1, "verdict": "keep"}))
+nxt = json.loads(f["out"]) if rc == 0 else {}
+rc2, out2, _ = run("tagcheck", nxt) if nxt else (1, "", "")
+check("fb_keeps_second_tagging_in_step", rc == 0 and rc2 == 0
+      and json.loads(out2)["documents"] == len(nxt["docs"]))
+
 # --- ties are settled by a fixed hash, not by the alphabet ----------------
 tied = {"atoms": list("abcdefgh"),
         "docs": {f"p{i}": [x, y] for i, (x, y) in enumerate(

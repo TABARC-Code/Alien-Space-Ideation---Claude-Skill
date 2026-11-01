@@ -10,10 +10,10 @@ The method is borrowed from Artiles et al., *The Alien Space of Science* (arXiv 
 
 ## What it does
 
-1. A separate agent writes ten ordinary ideas for your prompt before anything sees the corpus, so the common ground is on the table.
-2. Your corpus is split into atoms: one mechanic, technique, constraint, or theme each.
+1. A separate agent writes ten ordinary ideas for your prompt before anything sees the corpus, so the common ground is on the table. The result is scrubbed of anything personal to you.
+2. Your corpus is split into atoms: one mechanic, technique, constraint, or theme each. Two taggers do it independently, and a check shows where they disagree.
 3. The script lists triples of atoms that no document combines, where at least two of the three pairs do appear together somewhere.
-4. Another fresh agent scores each triple from 0 to 3 on whether the mechanism joining it actually works. It cites a corpus document for each pair. The citations get checked.
+4. Two fresh agents score each triple from 0 to 3 on whether the mechanism joining it actually works. Each cites a corpus document for each pair, and the citations get checked. The script ranks on the lower score and reports where the judges disagree.
 5. The script ranks the survivors with and without a weighting towards unusual combinations, so you can see what the weighting changed.
 6. The top five are written up: premise, bridge, smallest test, and what would kill it.
 
@@ -21,7 +21,7 @@ The script does the counting and the rule enforcement. The judging stays with a 
 
 ## Status
 
-Working and checked: the `pool`, `rank`, and `selftest` modes, input validation, the blind pool, and the diagnostics. The 64 checks in `evals/probe_ranker.py` pass on Python 3.11, 3.12, and 3.13.
+Working and checked: the `pool`, `rank`, and `selftest` modes, input validation, the blind pool, and the diagnostics. The 88 checks in `evals/probe_ranker.py` pass on Python 3.11, 3.12, and 3.13.
 
 Tried once on real material: a corpus of 89 installed Claude skills. The first judging pass turned up a rubric that rewarded familiarity, and the rubric was changed. The second pass produced five proposals that don't overlap the ordinary ideas, though two of them partly overlap skills that already exist.
 
@@ -48,7 +48,7 @@ python3 -I evals/probe_ranker.py
 python3 -I scripts/rank_alien.py pool references/example-input.json --n 10
 ```
 
-You should see `selftest: PASS`, then `64/64 passed`, then a JSON list of triples. The example only has 10 atoms, so you'll also get a warning on stderr that 25 to 60 is recommended. That's expected.
+You should see `selftest: PASS`, then `88/88 passed`, then a JSON list of triples. The example only has 10 atoms, so you'll also get a warning on stderr that 25 to 60 is recommended. That's expected.
 
 The pool is blind on purpose: no availability numbers, alphabetical order, and about 30% of the entries are ordinary triples included as controls. `--reveal` shows everything. Use it yourself, not for the judging pass.
 
@@ -77,6 +77,8 @@ python3 -I scripts/rank_alien.py rank your-input.json --beta 0.5
 | `groups` | Optional. Theme names mapped to atoms, for spotting one theme hogging the results. |
 | `blacklist` | Pairs of atoms you've rejected as incoherent. Never pooled or ranked. |
 | `coherence` | Scores from 0 to 3, one per judged triple. |
+| `judges` | Instead of `coherence`: two or more judges, each with scores for the same triples. |
+| `docs_second` | A second, independent tagging of the same documents, for `tagcheck`. |
 | `unanchored` | `true` if there's no real corpus. Caps every score at 2. |
 
 When documents carry a `source` (an author, a team, a repo), the script also counts how many sources already work with all three atoms. That's closer to the paper's question of who could plausibly propose an idea. Without sources, that part switches off.
@@ -90,9 +92,20 @@ When documents carry a `source` (an author, a team, a repo), the script also cou
 - `collapse_atoms` and `collapse_groups` name any atom or theme that turns up in more than three of the top five.
 - `precedent_note` warns if scores are rising with how familiar a triple is. That means the judging has drifted into rewarding the ordinary.
 - `mean_coherence_low_availability_half` and `mean_coherence_high_availability_half` compare the unusual half with the ordinary half. If the unusual half scores clearly lower, the novelty is costing you coherence.
+- `judge_exact_agreement`, `judge_within_one`, `judge_mean_spread`, and `judge_disputed` appear when there are several judges. Disputed triples (two or more points apart) are unresolved, not tied.
 - `distinct_atoms_top5` and `distinct_atoms_baseline` show how widely the results range compared with the ordinary ideas.
 
 Triples that already exist in the corpus are dropped, and so is anything scored below 2. Bad input exits with a one-line error rather than a stack trace or a quietly wrong ranking.
+
+## Checking the tagging
+
+If a second agent has tagged the same documents (`docs_second`), compare the two:
+
+```bash
+python3 -I scripts/rank_alien.py tagcheck input.json
+```
+
+You get the mean overlap, the documents where the taggers disagree most, and the atoms they use least consistently, worst first. Below 0.6 mean overlap the atom definitions need tightening before any pool is worth building. This checks how the definitions are applied, not whether they were the right ones.
 
 ## Recording a round
 
@@ -116,7 +129,7 @@ Kept ideas become corpus documents, `incoherent` kills put the pair on the black
 
 - The paper trained models on 16,068 machine learning papers. This trains nothing. Counts stand in for the availability model, and a written rubric stands in for the coherence model.
 - The paper's evidence covers machine learning literature only. One real round on a skills corpus isn't evidence it works elsewhere.
-- Judging uses one model per run. A separate agent helps, but it isn't a human panel.
+- Judges are separate agents, not human reviewers, and they come from one model family. Agreement between two of them shows the rubric is applied consistently. It doesn't show the ideas are good.
 - By default a triple needs two pairs with precedent, which keeps out the strangest combinations. `--min-pairs-seen 1` lets more through, at the cost of more noise.
 - Small corpora give thin pools. The script warns outside 25 to 60 atoms, and again above 150, where it gets slow.
 
@@ -125,10 +138,11 @@ Kept ideas become corpus documents, `incoherent` kills put the pair on the black
 ```text
 SKILL.md                      the procedure Claude follows
 scripts/rank_alien.py         pool, rank, selftest (stdlib only)
-evals/probe_ranker.py         64 checks on the script
+evals/probe_ranker.py         88 checks on the script
 references/example-input.json
 references/method-notes.md    what comes from the paper and what doesn't
 references/evals.md           behavioural evals
+references/agent-prompts.md   templates for the baseline, tagger, and judge agents
 LICENSE                       MIT
 CHANGELOG.md
 .github/workflows/test.yml    runs the checks on push

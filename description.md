@@ -27,7 +27,13 @@ Keep the idea, drop the training.
 
 **Coherence is a gate, not a weight.** Anything scoring below 2 is dropped before ranking. Blending coherence with novelty lets nonsense through on the strength of being strange.
 
-**Separate agents for the baseline and the judging.** The same session writing the ordinary ideas, building the atoms and scoring the results would be marking its own work. Splitting them is cheap and catches some of that. Not all, because they're still the same model family.
+**Separate agents for the baseline, the tagging, and the judging.** The same session writing the ordinary ideas, building the atoms and scoring the results would be marking its own work. Splitting them is cheap and catches some of that. Not all, because they're still the same model family.
+
+**Two judges, and the lower score counts.** One judge is one reading. Two let the script measure how often they agree, and flag the triples they're two points apart on, which are unresolved rather than averaged away. The lower score is the default because an idea that only one of two readers can make sense of hasn't earned a high rank.
+
+**Two taggers.** The atoms decide everything downstream, and for a while they were one pass by one reader. A second independent tagging and an overlap check show where the definitions are being applied inconsistently. They can't show the atoms were well chosen.
+
+**The baseline gets scrubbed.** The first real round's ordinary ideas had picked up details from the requester's profile, which makes them less ordinary than they should be. The baseline prompt now says to ignore any profile, and the result is read for personal context before it's used.
 
 **Controls.** About 30% of the pool comes from ordinary triples. They give the ranking something to compare against, and they're how the precedent bias above was spotted.
 
@@ -47,7 +53,7 @@ Everything is local. The script reads one JSON file, writes to stdout, and makes
 
 ## Current state
 
-v1.3.0. Working and checked: the pool, rank and selftest modes, validation, blacklist, unanchored cap, source coverage, log scaling, and the collapse, coherence and precedent diagnostics. All 64 checks in `evals/probe_ranker.py` pass.
+v1.4.0. Working and checked: the pool, rank and selftest modes, validation, blacklist, unanchored cap, source coverage, log scaling, and the collapse, coherence and precedent diagnostics. All 88 checks in `evals/probe_ranker.py` pass.
 
 One real round has run, on a corpus of installed skills. It found and fixed the precedent bias, and it produced five proposals with tests and kill conditions.
 

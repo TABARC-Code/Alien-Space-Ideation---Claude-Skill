@@ -13,21 +13,100 @@
     "narrative-prompts"
   ],
   "docs": {
-    "game_01": ["hidden-roles", "push-your-luck", "drafting"],
-    "game_02": ["area-control", "asymmetric-factions", "dice-pool"],
-    "game_03": ["worker-placement", "deck-building", "drafting"],
-    "game_04": ["legacy-campaign", "narrative-prompts", "hidden-roles"],
-    "game_05": ["asymmetric-factions", "deck-building", "area-control"],
-    "game_06": ["push-your-luck", "dice-pool", "narrative-prompts"],
-    "game_07": ["drafting", "area-control", "worker-placement"]
+    "game_01": [
+      "hidden-roles",
+      "push-your-luck",
+      "drafting"
+    ],
+    "game_02": [
+      "area-control",
+      "asymmetric-factions",
+      "dice-pool"
+    ],
+    "game_03": [
+      "worker-placement",
+      "deck-building",
+      "drafting"
+    ],
+    "game_04": [
+      "legacy-campaign",
+      "narrative-prompts",
+      "hidden-roles"
+    ],
+    "game_05": [
+      "asymmetric-factions",
+      "deck-building",
+      "area-control"
+    ],
+    "game_06": [
+      "push-your-luck",
+      "dice-pool",
+      "narrative-prompts"
+    ],
+    "game_07": [
+      "drafting",
+      "area-control",
+      "worker-placement"
+    ]
+  },
+  "docs_second": {
+    "game_01": [
+      "hidden-roles",
+      "push-your-luck",
+      "drafting"
+    ],
+    "game_02": [
+      "area-control",
+      "asymmetric-factions",
+      "dice-pool"
+    ],
+    "game_03": [
+      "worker-placement",
+      "deck-building",
+      "dice-pool"
+    ],
+    "game_04": [
+      "legacy-campaign",
+      "narrative-prompts",
+      "hidden-roles"
+    ],
+    "game_05": [
+      "asymmetric-factions",
+      "deck-building",
+      "area-control"
+    ],
+    "game_06": [
+      "push-your-luck",
+      "dice-pool"
+    ],
+    "game_07": [
+      "drafting",
+      "area-control",
+      "worker-placement"
+    ]
   },
   "baseline": [
-    ["deck-building", "narrative-prompts", "asymmetric-factions"],
-    ["worker-placement", "drafting", "deck-building"]
+    [
+      "deck-building",
+      "narrative-prompts",
+      "asymmetric-factions"
+    ],
+    [
+      "worker-placement",
+      "drafting",
+      "deck-building"
+    ]
   ],
   "groups": {
-    "conflict": ["area-control", "asymmetric-factions", "hidden-roles"],
-    "story": ["legacy-campaign", "narrative-prompts"]
+    "conflict": [
+      "area-control",
+      "asymmetric-factions",
+      "hidden-roles"
+    ],
+    "story": [
+      "legacy-campaign",
+      "narrative-prompts"
+    ]
   },
   "blacklist": [],
   "unanchored": false,

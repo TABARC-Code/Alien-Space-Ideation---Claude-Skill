@@ -2,6 +2,13 @@
 
 Versions before 1.2.0 were development builds and were never published. They're listed because the later fixes make no sense without them.
 
+## 1.4.0
+
+- `judges`: two or more judges can score the same triples. Ranking uses the lowest score (or the mean, with `--combine mean`), and the diagnostics report exact agreement, agreement within a point, mean spread, and the triples the judges are two or more points apart on.
+- New `tagcheck` mode: compares two independent taggings of the same documents and lists the documents and atoms where they disagree. `feedback` keeps the second tagging in step when it adds kept ideas.
+- `references/agent-prompts.md`: templates for the baseline, tagger, and judge agents, what each may see, and a scrub step for the baseline.
+- Probe suite grown from 64 to 88 checks.
+
 ## 1.3.0
 
 - Fixed a mistake of mine: equal scores were being settled alphabetically, so atoms near the start of the alphabet won every tie. Ties now go by a fixed hash. Still deterministic, no longer biased.

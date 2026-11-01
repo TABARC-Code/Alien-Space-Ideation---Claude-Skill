@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""rank_alien.py v1.3.0 - the deterministic bits of alien-space-ideation.
+"""rank_alien.py v1.4.0 - the deterministic bits of alien-space-ideation.
 
 Author: TABARC-Code
 
@@ -14,6 +14,8 @@ Modes
             --reveal shows availability, controls, and source coverage.
   rank      take coherence scores and rank at beta=0 and at --beta, plus
             diagnostics on whether novelty is costing coherence.
+  tagcheck  compare two independent taggings of the same documents ("docs" and
+            "docs_second") and report where the taggers disagree.
   feedback  apply a round's keep/kill decisions to the input file and log the
             round in a ledger. Takes a decisions file (see below).
   selftest  quick built-in checks. The full suite is evals/probe_ranker.py.
@@ -39,6 +41,11 @@ Input JSON (references/example-input.json)
   baseline   [[atom, ...], ...]        atoms used by the ordinary ideas
   blacklist  [[atom, atom], ...]       pairs rejected as incoherent; never pooled
   coherence  {"a|b|c": 0-3}            judged scores (any atom order)
+  judges     {"name": {"a|b|c": 0-3}}  two or more judges scoring the same triples,
+                                       instead of "coherence". Ranking uses the lowest
+                                       score (--combine mean for the mean); the
+                                       diagnostics report where the judges disagree.
+  docs_second same shape as docs       a second, independent tagging, for tagcheck
   unanchored true/false                no real corpus: scores capped at 2
   groups     {theme: [atom, ...]}      optional; flags a theme hogging the top five
 
@@ -88,6 +95,42 @@ def is_strs(x):
     return isinstance(x, list) and all(isinstance(a, str) for a in x)
 
 
+def parse_docs(raw_docs, field):
+    if not isinstance(raw_docs, dict):
+        die(f'"{field}" must map document names to atom lists or {{"atoms", "source"}} objects')
+    docs = {}
+    for name, v in raw_docs.items():
+        if is_strs(v):
+            docs[name] = {"atoms": v, "source": None}
+        elif isinstance(v, dict) and is_strs(v.get("atoms")) \
+                and (v.get("source") is None or (isinstance(v["source"], str) and v["source"])):
+            docs[name] = {"atoms": v["atoms"], "source": v.get("source")}
+        else:
+            die(f'{field}: doc {name!r} must be a list of atoms or {{"atoms": [...], "source": "..."}}')
+    return docs
+
+
+def norm_scores(raw, vocab, label):
+    """Validate {"a|b|c": 0-3} and return it with keys sorted."""
+    if not isinstance(raw, dict):
+        die(f'{label} must be an object of "a|b|c": score')
+    out = {}
+    for k, v in raw.items():
+        parts = k.split("|")
+        if len(parts) != 3 or len(set(parts)) != 3:
+            die(f'{label} key {k!r} must name exactly three distinct atoms')
+        if not set(parts) <= vocab:
+            die(f'{label} key {k!r} uses atoms not in "atoms": '
+                f'{sorted(set(parts) - vocab)}')
+        if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= 3:
+            die(f'{label} score for {k!r} must be an integer 0 to 3, got {v!r}')
+        nk = "|".join(sorted(parts))
+        if nk in out:
+            die(f"{label} lists {nk!r} twice (atom order doesn't matter)")
+        out[nk] = v
+    return out
+
+
 def load(path):
     try:
         with open(path, encoding="utf-8") as f:
@@ -103,18 +146,8 @@ def load(path):
                                               for a in atoms):
         die('"atoms" must be a list of non-empty strings without "|"')
     vocab = set(atoms)
-    raw_docs = data.get("docs", {})
-    if not isinstance(raw_docs, dict):
-        die('"docs" must map document names to atom lists or {"atoms", "source"} objects')
-    docs = {}
-    for name, v in raw_docs.items():
-        if is_strs(v):
-            docs[name] = {"atoms": v, "source": None}
-        elif isinstance(v, dict) and is_strs(v.get("atoms")) \
-                and (v.get("source") is None or (isinstance(v["source"], str) and v["source"])):
-            docs[name] = {"atoms": v["atoms"], "source": v.get("source")}
-        else:
-            die(f'doc {name!r} must be a list of atoms or {{"atoms": [...], "source": "..."}}')
+    docs = parse_docs(data.get("docs", {}), "docs")
+    docs_second = parse_docs(data["docs_second"], "docs_second") if "docs_second" in data else None
     base = data.get("baseline", [])
     if not isinstance(base, list) or not all(is_strs(b) for b in base):
         die('"baseline" must be a list of lists of atom names')
@@ -124,22 +157,25 @@ def load(path):
             die(f'"blacklist" entries must be two distinct known atoms, got {p!r}')
         bl.add(frozenset(p))
     raw = data.get("coherence", {})
-    if not isinstance(raw, dict):
-        die('"coherence" must be an object of "a|b|c": score')
-    coh = {}
-    for k, v in raw.items():
-        parts = k.split("|")
-        if len(parts) != 3 or len(set(parts)) != 3:
-            die(f'coherence key {k!r} must name exactly three distinct atoms')
-        if not set(parts) <= vocab:
-            die(f'coherence key {k!r} uses atoms not in "atoms": '
-                f'{sorted(set(parts) - vocab)}')
-        if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= 3:
-            die(f'coherence score for {k!r} must be an integer 0 to 3, got {v!r}')
-        nk = "|".join(sorted(parts))
-        if nk in coh:
-            die(f"coherence lists {nk!r} twice (atom order doesn't matter)")
-        coh[nk] = v
+    raw_judges = data.get("judges", {})
+    judges = {}
+    if raw_judges:
+        if raw:
+            die('use "coherence" or "judges", not both')
+        if not isinstance(raw_judges, dict) or len(raw_judges) < 2:
+            die('"judges" needs at least two judges; use "coherence" for one')
+        for jn, jr in raw_judges.items():
+            judges[jn] = norm_scores(jr, vocab, f"judge {jn!r}")
+        names = list(judges)
+        first = set(judges[names[0]])
+        for jn in names[1:]:
+            if set(judges[jn]) != first:
+                diff = sorted(set(judges[jn]) ^ first)
+                die(f"every judge must score the same triples; {names[0]!r} and {jn!r} "
+                    f"differ on {len(diff)} (first: {diff[0]!r})")
+        coh = {k: min(j[k] for j in judges.values()) for k in first}  # cautious default
+    else:
+        coh = norm_scores(raw, vocab, "coherence")
     unanchored = data.get("unanchored", False)
     if not isinstance(unanchored, bool):
         die('"unanchored" must be true or false')
@@ -147,8 +183,9 @@ def load(path):
     if not isinstance(groups, dict) or not all(is_strs(v) and set(v) <= vocab
                                                for v in groups.values()):
         die('"groups" must map theme names to lists of known atoms')
-    return {"vocab": vocab, "docs": docs, "baseline": [set(b) for b in base],
-            "blacklist": bl, "coherence": coh, "unanchored": unanchored,
+    return {"vocab": vocab, "docs": docs, "docs_second": docs_second,
+            "baseline": [set(b) for b in base],
+            "blacklist": bl, "coherence": coh, "judges": judges, "unanchored": unanchored,
             "groups": {g: set(v) for g, v in groups.items()}}
 
 
@@ -232,7 +269,7 @@ def pool(cfg, n, min_pairs, w, controls, reveal):
     return [{"triple": r["triple"], "key": r["key"]} for r in out]
 
 
-def rank(cfg, beta, gate, w):
+def rank(cfg, beta, gate, w, combine="min"):
     st = stats(cfg)
     w = weights(w, st)
     rows = []
@@ -240,9 +277,13 @@ def rank(cfg, beta, gate, w):
         t = tuple(k.split("|"))
         if st["trip"][t] > 0 or blacklisted(t, cfg["blacklist"]):
             continue  # strict novelty only; rejected pairs stay rejected
+        scores = None
+        if cfg["judges"]:
+            scores = {n: j[k] for n, j in cfg["judges"].items()}
+            c = min(scores.values()) if combine == "min" else sum(scores.values()) / len(scores)
         if cfg["unanchored"]:
             c = min(c, 2)  # no corpus to anchor the judgement: 3 is not available
-        rows.append({"key": k, "coherence": c,
+        rows.append({"key": k, "coherence": c, "judge_scores": scores,
                      "availability": availability(t, st, cfg["baseline"], w),
                      "pairs_seen": sum(1 for x in itertools.combinations(sorted(t), 2)
                                        if st["pair"][x] > 0)})
@@ -255,7 +296,8 @@ def rank(cfg, beta, gate, w):
     passed = [r for r in rows if r["coherence"] >= gate]  # coherence is a gate
     rb = order(lambda r: (1 - beta) * r["coherence"] / 3 + beta * (1 - r["availability"]),
                passed)
-    ranked = [{**{x: v for x, v in r.items() if x != "pairs_seen"},
+    ranked = [{**{x: v for x, v in r.items()
+                  if x != "pairs_seen" and not (x == "judge_scores" and v is None)},
                "availability": round(r["availability"], 4),
                "rank_beta0": r0[r["key"]], "rank_beta": rb[r["key"]],
                "shift": r0[r["key"]] - rb[r["key"]]} for r in passed]
@@ -276,9 +318,26 @@ def diagnostics(cfg, st, rows, passed, ranked):
          "distinct_atoms_baseline": len(set().union(*cfg["baseline"])) if cfg["baseline"] else 0,
          "mean_coherence_low_availability_half": None,
          "mean_coherence_high_availability_half": None, "note": None,
-         "precedent_note": None}
+         "precedent_note": None, "judge_note": None}
     full = [r["coherence"] for r in rows if r["pairs_seen"] == 3]
     part = [r["coherence"] for r in rows if r["pairs_seen"] < 3]
+    if cfg["judges"]:
+        spreads = {r["key"]: max(r["judge_scores"].values()) - min(r["judge_scores"].values())
+                   for r in rows}
+        n = len(spreads) or 1
+        d["judges"] = len(cfg["judges"])
+        d["judge_exact_agreement"] = round(sum(1 for v in spreads.values() if v == 0) / n, 3)
+        d["judge_within_one"] = round(sum(1 for v in spreads.values() if v <= 1) / n, 3)
+        d["judge_mean_spread"] = round(sum(spreads.values()) / n, 3)
+        d["judge_disputed"] = sorted(k for k, v in spreads.items() if v >= 2)
+        if d["judge_disputed"]:
+            d["judge_note"] = (f"{len(d['judge_disputed'])} triple(s) have judges two or more "
+                               "points apart: treat their rank as unresolved")
+        elif d["judge_exact_agreement"] < 0.5:
+            d["judge_note"] = ("judges agree exactly on fewer than half the triples: "
+                               "the rubric is probably too loose")
+        else:
+            d["judge_note"] = "judges broadly agree"
     if len(full) >= 2 and len(part) >= 2:
         gap = sum(full) / len(full) - sum(part) / len(part)
         d["precedent_note"] = (
@@ -412,6 +471,8 @@ def feedback(in_path, dec_path, out_path, in_place, ledger):
                 n += 1
                 name = f"kept_r{rnd}_{n}"
             docs[name] = list(d["atoms"])
+            if isinstance(raw.get("docs_second"), dict):
+                raw["docs_second"][name] = list(d["atoms"])  # kept ideas are tagged by definition
         else:
             killed += 1
             reasons[d["reason"]] += 1
@@ -421,6 +482,8 @@ def feedback(in_path, dec_path, out_path, in_place, ledger):
                 baseline.append(list(d["atoms"]))
     dropped = len(cfg["coherence"]) - len(decs)
     raw["coherence"] = {}
+    if "judges" in raw:
+        raw["judges"] = {}
     write_json_atomic(target, raw)
 
     if ledger:
@@ -461,13 +524,51 @@ def feedback(in_path, dec_path, out_path, in_place, ledger):
             "ledger": ledger or None}
 
 
+def tagcheck(cfg, min_j):
+    """Compare two independent taggings of the same documents."""
+    a, b = cfg["docs"], cfg["docs_second"]
+    if b is None:
+        die('tagcheck needs "docs_second": a second, independent tagging of the same documents')
+    if set(a) != set(b):
+        only_a, only_b = sorted(set(a) - set(b)), sorted(set(b) - set(a))
+        die(f'"docs" and "docs_second" must name the same documents '
+            f"(only in docs: {only_a[:3]}, only in docs_second: {only_b[:3]})")
+    bad = sorted({x for d in b.values() for x in d["atoms"]} - cfg["vocab"])
+    if bad:
+        die(f'"docs_second" uses atoms not in "atoms": {bad[:5]}')
+    per_doc, atoms = [], defaultdict(lambda: [0, 0, 0])  # both, first only, second only
+    for name in sorted(a):
+        sa = set(a[name]["atoms"]) & cfg["vocab"]
+        sb = set(b[name]["atoms"]) & cfg["vocab"]
+        union = sa | sb
+        j = len(sa & sb) / len(union) if union else 1.0
+        per_doc.append({"doc": name, "jaccard": round(j, 3),
+                        "only_first": sorted(sa - sb), "only_second": sorted(sb - sa)})
+        for x in sa & sb:
+            atoms[x][0] += 1
+        for x in sa - sb:
+            atoms[x][1] += 1
+        for x in sb - sa:
+            atoms[x][2] += 1
+    mean_j = sum(r["jaccard"] for r in per_doc) / len(per_doc) if per_doc else 1.0
+    by_atom = sorted(({"atom": x, "both": v[0], "first_only": v[1], "second_only": v[2],
+                       "jaccard": round(v[0] / sum(v), 3)} for x, v in atoms.items()),
+                     key=lambda r: (r["jaccard"], r["atom"]))
+    return {"documents": len(per_doc), "mean_jaccard": round(mean_j, 3),
+            "low_agreement_docs": sorted((r for r in per_doc if r["jaccard"] < min_j),
+                                         key=lambda r: (r["jaccard"], r["doc"])),
+            "atoms_worst_first": by_atom,
+            "verdict": ("taggers broadly agree" if mean_j >= min_j else
+                        "taggers disagree a lot: reconcile the atom definitions before pooling")}
+
+
 def selftest():
     def doc(atoms, source=None):
         return {"atoms": list(atoms), "source": source}
     cfg = {"vocab": set("abcde"),
            "docs": {"d1": doc("abc"), "d2": doc("abd"), "d3": doc("cde"), "d4": doc("ae")},
            "baseline": [set("abx")], "blacklist": {frozenset("ac")}, "coherence": {},
-           "unanchored": False}
+           "unanchored": False, "judges": {}}
     w = (W_PAIR, W_BASE, W_HABIT, W_COMM)
     p = pool(cfg, 50, 2, w, 0.0, True)
     keys = [r["key"] for r in p]
@@ -487,7 +588,7 @@ def selftest():
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["pool", "rank", "feedback", "selftest"])
+    ap.add_argument("mode", choices=["pool", "rank", "feedback", "tagcheck", "selftest"])
     ap.add_argument("input", nargs="?", help="input JSON path")
     ap.add_argument("decisions", nargs="?", help="feedback: decisions JSON path")
     ap.add_argument("--out", help="feedback: write the updated input here")
@@ -506,6 +607,10 @@ def main():
                     help="weight on unavailability, 0 to 1 (default 0.5)")
     ap.add_argument("--gate", type=int, default=2,
                     help="minimum coherence to be ranked, 0 to 3 (default 2)")
+    ap.add_argument("--combine", choices=["min", "mean"], default=None,
+                    help="rank, with several judges: use the lowest score (default) or the mean")
+    ap.add_argument("--min-jaccard", type=float, default=0.6,
+                    help="tagcheck: documents below this overlap are flagged (default 0.6)")
     ap.add_argument("--w-pair", type=float, default=W_PAIR)
     ap.add_argument("--w-base", type=float, default=W_BASE)
     ap.add_argument("--w-habit", type=float, default=W_HABIT)
@@ -525,6 +630,8 @@ def main():
         ap.error("--beta must be between 0 and 1")
     if not 0 <= a.gate <= 3:
         ap.error("--gate must be 0 to 3")
+    if not 0 <= a.min_jaccard <= 1 or math.isnan(a.min_jaccard):
+        ap.error("--min-jaccard must be between 0 and 1")
     w = (a.w_pair, a.w_base, a.w_habit, a.w_comm)
     if any(x < 0 or math.isnan(x) for x in w):
         ap.error("availability weights must not be negative")
@@ -536,6 +643,12 @@ def main():
         print()
         return
     cfg = load(a.input)
+    if a.combine and not cfg["judges"]:
+        ap.error('--combine only applies when the input has "judges"')
+    if a.mode == "tagcheck":
+        json.dump(tagcheck(cfg, a.min_jaccard), sys.stdout, indent=2)
+        print()
+        return
     nv = len(cfg["vocab"])
     if nv > SLOW_ATOMS:
         warn(f"{nv} atoms means {math.comb(nv, 3):,} triples to check; this will be slow. "
@@ -543,7 +656,7 @@ def main():
     elif not 25 <= nv <= 60:
         warn(f"{nv} atoms; SKILL.md recommends 25 to 60")
     res = pool(cfg, a.n, a.min_pairs_seen, w, a.controls, a.reveal) if a.mode == "pool" \
-        else rank(cfg, a.beta, a.gate, w)
+        else rank(cfg, a.beta, a.gate, w, a.combine or "min")
     json.dump(res, sys.stdout, indent=2)
     print()
 
