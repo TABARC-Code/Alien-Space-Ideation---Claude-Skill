@@ -1,0 +1,35 @@
+{
+  "_note": "Invented example for testing the script. Replace with your own corpus.",
+  "atoms": [
+    "hidden-roles",
+    "push-your-luck",
+    "drafting",
+    "area-control",
+    "worker-placement",
+    "asymmetric-factions",
+    "legacy-campaign",
+    "dice-pool",
+    "deck-building",
+    "narrative-prompts"
+  ],
+  "docs": {
+    "game_01": ["hidden-roles", "push-your-luck", "drafting"],
+    "game_02": ["area-control", "asymmetric-factions", "dice-pool"],
+    "game_03": ["worker-placement", "deck-building", "drafting"],
+    "game_04": ["legacy-campaign", "narrative-prompts", "hidden-roles"],
+    "game_05": ["asymmetric-factions", "deck-building", "area-control"],
+    "game_06": ["push-your-luck", "dice-pool", "narrative-prompts"],
+    "game_07": ["drafting", "area-control", "worker-placement"]
+  },
+  "baseline": [
+    ["deck-building", "narrative-prompts", "asymmetric-factions"],
+    ["worker-placement", "drafting", "deck-building"]
+  ],
+  "groups": {
+    "conflict": ["area-control", "asymmetric-factions", "hidden-roles"],
+    "story": ["legacy-campaign", "narrative-prompts"]
+  },
+  "blacklist": [],
+  "unanchored": false,
+  "coherence": {}
+}
