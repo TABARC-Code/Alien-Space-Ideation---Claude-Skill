@@ -24,6 +24,6 @@ Author: TABARC-Code. Scoring: accuracy 40, completeness 25, consistency 20, clar
 Evals 2 and 6 were exercised in the first real round (corpus of 89 installed skills) but not scored against the rubric above. Eval 2: none of the five proposals duplicates an existing skill outright, but two partly overlap existing skills and say so. Eval 6: the theme check fired on tabletop and two proposals were swapped.
 
 ## Script
-`python3 -I scripts/rank_alien.py selftest` exits 0, and `python3 -I evals/probe_ranker.py` passes 41 of 41. The probes cover bad input, blind output, the blacklist, the unanchored cap, collapse flags, source coverage, log scaling, precedent and theme diagnostics, and ranking invariants.
+`python3 -I scripts/rank_alien.py selftest` exits 0, and `python3 -I evals/probe_ranker.py` passes 64 of 64. The probes cover bad input, blind output, the blacklist, the unanchored cap, collapse flags, source coverage, log scaling, precedent and theme diagnostics, ranking invariants, tie-breaking, and the feedback mode.
 
 Eval 4 note: with fewer than 25 atoms the script warns on stderr; it does not refuse.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""rank_alien.py v1.2.0 - the deterministic bits of alien-space-ideation.
+"""rank_alien.py v1.3.0 - the deterministic bits of alien-space-ideation.
 
 Author: TABARC-Code
 
@@ -14,7 +14,23 @@ Modes
             --reveal shows availability, controls, and source coverage.
   rank      take coherence scores and rank at beta=0 and at --beta, plus
             diagnostics on whether novelty is costing coherence.
+  feedback  apply a round's keep/kill decisions to the input file and log the
+            round in a ledger. Takes a decisions file (see below).
   selftest  quick built-in checks. The full suite is evals/probe_ranker.py.
+
+Decisions file (feedback mode)
+  {"round": 2, "beta": 0.5, "judge": "fresh agent",
+   "decisions": [
+     {"key": "a|b|c", "verdict": "keep", "note": "worth a prototype"},
+     {"key": "d|e|f", "verdict": "kill", "reason": "incoherent", "pair": ["d", "e"]},
+     {"key": "g|h|i", "verdict": "kill", "reason": "obvious"},
+     {"key": "j|k|l", "verdict": "kill", "reason": "off-brief"}]}
+  keep > the triple becomes a corpus document (so it is no longer unmade)
+  incoherent > the named pair goes on the blacklist
+  obvious > the triple's atoms are added to the baseline
+  off-brief > ledger note only
+Every decided key must be a triple scored in "coherence". Scores belong to the
+round, so the output file starts the next round with "coherence" empty.
 
 Input JSON (references/example-input.json)
   atoms      list of atom names (no "|")
@@ -40,14 +56,23 @@ never quietly accepts something it can't interpret.
 The weights are the author's defaults, not the paper's. Tunable.
 """
 import argparse
+import hashlib
 import itertools
 import json
 import math
+import os
+import re
 import sys
 from collections import Counter, defaultdict
 
 W_PAIR, W_BASE, W_HABIT, W_COMM = 0.45, 0.1875, 0.1125, 0.25
 SLOW_ATOMS = 150
+
+
+def tiebreak(key):
+    """Deterministic, order-neutral tie-break. Alphabetical order would quietly
+    favour atoms near the start of the alphabet whenever scores tie."""
+    return hashlib.sha256(("alien-space:" + key).encode("utf-8")).hexdigest()
 
 
 def die(msg):
@@ -190,7 +215,7 @@ def pool(cfg, n, min_pairs, w, controls, reveal):
         cands.append({"triple": list(t), "key": "|".join(t), "pairs_seen": seen,
                       "availability": round(availability(t, st, cfg["baseline"], w), 4),
                       "covered_by": covered_by(t, st)})
-    cands.sort(key=lambda r: (r["availability"], r["key"]))
+    cands.sort(key=lambda r: (r["availability"], tiebreak(r["key"]), r["key"]))
     want_ctrl = int(round(n * controls))
     alien, rest = cands[:n - want_ctrl], cands[n - want_ctrl:]
     k = min(want_ctrl, len(rest))  # controls: evenly spaced through the rest
@@ -201,7 +226,7 @@ def pool(cfg, n, min_pairs, w, controls, reveal):
         r["control"] = True
     out = alien + ctrl
     if reveal:
-        out.sort(key=lambda r: (r["availability"], r["key"]))
+        out.sort(key=lambda r: (r["availability"], tiebreak(r["key"]), r["key"]))
         return out
     out.sort(key=lambda r: r["key"])  # alphabetical: order must not leak availability
     return [{"triple": r["triple"], "key": r["key"]} for r in out]
@@ -223,7 +248,7 @@ def rank(cfg, beta, gate, w):
                                        if st["pair"][x] > 0)})
 
     def order(fn, subset):
-        s = sorted(subset, key=lambda r: (-fn(r), r["key"]))
+        s = sorted(subset, key=lambda r: (-fn(r), tiebreak(r["key"]), r["key"]))
         return {r["key"]: i + 1 for i, r in enumerate(s)}
 
     r0 = order(lambda r: r["coherence"] / 3, rows)  # beta 0: coherence only
@@ -263,7 +288,7 @@ def diagnostics(cfg, st, rows, passed, ranked):
     if len(rows) < 4:
         d["note"] = "fewer than 4 judged triples: no comparison possible"
         return d
-    s = sorted(rows, key=lambda r: (r["availability"], r["key"]))
+    s = sorted(rows, key=lambda r: (r["availability"], tiebreak(r["key"]), r["key"]))
     h = len(s) // 2
     lo, hi = s[:h], s[-h:]
     d["mean_coherence_low_availability_half"] = round(sum(r["coherence"] for r in lo) / len(lo), 3)
@@ -273,6 +298,167 @@ def diagnostics(cfg, st, rows, passed, ranked):
                  "rubric and the atoms before trusting the top ranks") if gap >= 0.5 else \
                 "no large coherence penalty for the unusual half"
     return d
+
+
+REASONS = ("incoherent", "obvious", "off-brief")
+
+
+def read_decisions(path, cfg):
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+    except OSError as e:
+        die(f"cannot read {path}: {e.strerror}")
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        die(f"{path} is not valid JSON: {e}")
+    if not isinstance(d, dict):
+        die("decisions file must be a JSON object")
+    rnd = d.get("round")
+    if isinstance(rnd, bool) or not isinstance(rnd, int) or rnd < 1:
+        die('"round" must be a whole number, 1 or more')
+    for field in ("judge",):
+        if field in d and not isinstance(d[field], str):
+            die(f'"{field}" must be a string')
+    if "beta" in d and (isinstance(d["beta"], bool) or not isinstance(d["beta"], (int, float))
+                        or not 0 <= d["beta"] <= 1):
+        die('"beta" must be a number between 0 and 1')
+    items = d.get("decisions")
+    if not isinstance(items, list) or not items:
+        die('"decisions" must be a non-empty list')
+    seen, out = set(), []
+    for i, it in enumerate(items, 1):
+        if not isinstance(it, dict):
+            die(f"decision {i} must be an object")
+        parts = str(it.get("key", "")).split("|")
+        if len(parts) != 3 or len(set(parts)) != 3 or not set(parts) <= cfg["vocab"]:
+            die(f"decision {i}: key must name three distinct known atoms")
+        key = "|".join(sorted(parts))
+        if key not in cfg["coherence"]:
+            die(f"decision {i}: {key!r} was not scored in \"coherence\", so it can't be decided")
+        if key in seen:
+            die(f"decision {i}: {key!r} is decided twice")
+        seen.add(key)
+        verdict = it.get("verdict")
+        if verdict not in ("keep", "kill"):
+            die(f'decision {i}: verdict must be "keep" or "kill"')
+        note = it.get("note", "")
+        if not isinstance(note, str):
+            die(f"decision {i}: note must be a string")
+        rec = {"key": key, "atoms": sorted(parts), "verdict": verdict, "note": note,
+               "reason": None, "pair": None}
+        if verdict == "kill":
+            if it.get("reason") not in REASONS:
+                die(f"decision {i}: a kill needs a reason, one of {', '.join(REASONS)}")
+            rec["reason"] = it["reason"]
+            if it["reason"] == "incoherent":
+                pair = it.get("pair")
+                if not is_strs(pair) or len(set(pair)) != 2 or not set(pair) <= set(parts):
+                    die(f"decision {i}: an incoherent kill needs \"pair\": two atoms from the triple")
+                rec["pair"] = sorted(pair)
+        out.append(rec)
+    return rnd, d.get("beta"), d.get("judge"), out
+
+
+def ledger_rounds(text):
+    """Return [(round_number, set_of_reasons)] in file order."""
+    rounds, cur = [], None
+    for line in text.splitlines():
+        m = re.match(r"## Round (\d+)\s*$", line)
+        if m:
+            cur = [int(m.group(1)), set()]
+            rounds.append(cur)
+        elif cur is not None and line.startswith("Reasons: "):
+            cur[1] = {r.split("=")[0].strip() for r in line[9:].split(",") if "=" in r}
+    return [(n, r) for n, r in rounds]
+
+
+def write_json_atomic(path, obj):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=1)
+        f.write("\n")
+    os.replace(tmp, path)
+
+
+def feedback(in_path, dec_path, out_path, in_place, ledger):
+    cfg = load(in_path)  # validates the input file as well
+    rnd, beta, judge, decs = read_decisions(dec_path, cfg)
+    if in_place and out_path:
+        die("use --out or --in-place, not both")
+    if not in_place and not out_path:
+        die("give --out PATH, or --in-place to overwrite the input")
+    target = in_path if in_place else out_path
+    if not in_place and os.path.abspath(out_path) == os.path.abspath(in_path):
+        die("--out is the input file; use --in-place if you mean it")
+    ledger_text = ""
+    if ledger and os.path.exists(ledger):
+        with open(ledger, encoding="utf-8") as f:
+            ledger_text = f.read()
+        if any(n == rnd for n, _ in ledger_rounds(ledger_text)):
+            die(f"{ledger} already has a Round {rnd}; each round is logged once")
+
+    with open(in_path, encoding="utf-8") as f:
+        raw = json.load(f)
+    docs = raw.setdefault("docs", {})
+    blacklist = raw.setdefault("blacklist", [])
+    baseline = raw.setdefault("baseline", [])
+    kept = killed = 0
+    reasons = Counter()
+    for d in decs:
+        if d["verdict"] == "keep":
+            kept += 1
+            name, n = f"kept_r{rnd}_{kept}", kept
+            while name in docs:
+                n += 1
+                name = f"kept_r{rnd}_{n}"
+            docs[name] = list(d["atoms"])
+        else:
+            killed += 1
+            reasons[d["reason"]] += 1
+            if d["reason"] == "incoherent" and d["pair"] not in [sorted(b) for b in blacklist]:
+                blacklist.append(d["pair"])
+            elif d["reason"] == "obvious":
+                baseline.append(list(d["atoms"]))
+    dropped = len(cfg["coherence"]) - len(decs)
+    raw["coherence"] = {}
+    write_json_atomic(target, raw)
+
+    if ledger:
+        lines = [] if ledger_text else ["# Ledger", ""]
+        lines += [f"## Round {rnd}"]
+        meta = []
+        if beta is not None:
+            meta.append(f"Beta: {beta}")
+        if judge:
+            meta.append(f"Judge: {judge}")
+        if meta:
+            lines.append(". ".join(meta) + ".")
+        lines.append(f"Kept: {kept}. Killed: {killed}.")
+        if reasons:
+            lines.append("Reasons: " + ", ".join(f"{k}={v}" for k, v in sorted(reasons.items())))
+        for d in decs:
+            tail = f" {d['note']}" if d["note"] else ""
+            if d["verdict"] == "keep":
+                lines.append(f"- keep `{d['key']}`.{tail}")
+            else:
+                extra = f" ({'+'.join(d['pair'])})" if d["pair"] else ""
+                lines.append(f"- kill `{d['key']}`: {d['reason']}{extra}.{tail}")
+        lines.append("")
+        with open(ledger, "a", encoding="utf-8") as f:
+            f.write(("\n" if ledger_text and not ledger_text.endswith("\n\n") else "")
+                    + "\n".join(lines) + "\n")
+        with open(ledger, encoding="utf-8") as f:
+            recent = ledger_rounds(f.read())[-3:]
+        if len(recent) == 3:
+            common = set.intersection(*(r for _, r in recent))
+            for r in sorted(common):
+                warn(f"kill reason '{r}' has turned up in three rounds running; "
+                     "the rubric or the atoms are wrong, not the decisions")
+    if dropped:
+        warn(f"{dropped} scored triple(s) had no decision and were dropped with the scores")
+    return {"round": rnd, "kept": kept, "killed": killed, "reasons": dict(reasons),
+            "undecided_dropped": dropped, "wrote": target,
+            "ledger": ledger or None}
 
 
 def selftest():
@@ -301,8 +487,13 @@ def selftest():
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["pool", "rank", "selftest"])
+    ap.add_argument("mode", choices=["pool", "rank", "feedback", "selftest"])
     ap.add_argument("input", nargs="?", help="input JSON path")
+    ap.add_argument("decisions", nargs="?", help="feedback: decisions JSON path")
+    ap.add_argument("--out", help="feedback: write the updated input here")
+    ap.add_argument("--in-place", action="store_true",
+                    help="feedback: overwrite the input file")
+    ap.add_argument("--ledger", help="feedback: append the round to this markdown ledger")
     ap.add_argument("--n", type=int, default=40, help="pool size, 1 or more (default 40)")
     ap.add_argument("--controls", type=float, default=0.3,
                     help="fraction of the pool drawn evenly from higher-availability "
@@ -337,6 +528,13 @@ def main():
     w = (a.w_pair, a.w_base, a.w_habit, a.w_comm)
     if any(x < 0 or math.isnan(x) for x in w):
         ap.error("availability weights must not be negative")
+    if a.mode == "feedback":
+        if not a.decisions:
+            ap.error("feedback needs a decisions JSON path after the input path")
+        json.dump(feedback(a.input, a.decisions, a.out, a.in_place, a.ledger),
+                  sys.stdout, indent=2)
+        print()
+        return
     cfg = load(a.input)
     nv = len(cfg["vocab"])
     if nv > SLOW_ATOMS:

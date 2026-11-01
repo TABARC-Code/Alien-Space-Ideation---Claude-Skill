@@ -21,7 +21,7 @@ The script does the counting and the rule enforcement. The judging stays with a 
 
 ## Status
 
-Working and checked: the `pool`, `rank`, and `selftest` modes, input validation, the blind pool, and the diagnostics. The 41 checks in `evals/probe_ranker.py` pass.
+Working and checked: the `pool`, `rank`, and `selftest` modes, input validation, the blind pool, and the diagnostics. The 64 checks in `evals/probe_ranker.py` pass on Python 3.11, 3.12, and 3.13.
 
 Tried once on real material: a corpus of 89 installed Claude skills. The first judging pass turned up a rubric that rewarded familiarity, and the rubric was changed. The second pass produced five proposals that don't overlap the ordinary ideas, though two of them partly overlap skills that already exist.
 
@@ -48,7 +48,7 @@ python3 -I evals/probe_ranker.py
 python3 -I scripts/rank_alien.py pool references/example-input.json --n 10
 ```
 
-You should see `selftest: PASS`, then `41/41 passed`, then a JSON list of triples. The example only has 10 atoms, so you'll also get a warning on stderr that 25 to 60 is recommended. That's expected.
+You should see `selftest: PASS`, then `64/64 passed`, then a JSON list of triples. The example only has 10 atoms, so you'll also get a warning on stderr that 25 to 60 is recommended. That's expected.
 
 The pool is blind on purpose: no availability numbers, alphabetical order, and about 30% of the entries are ordinary triples included as controls. `--reveal` shows everything. Use it yourself, not for the judging pass.
 
@@ -94,6 +94,24 @@ When documents carry a `source` (an author, a team, a repo), the script also cou
 
 Triples that already exist in the corpus are dropped, and so is anything scored below 2. Bad input exits with a one-line error rather than a stack trace or a quietly wrong ranking.
 
+## Recording a round
+
+After you've picked what to keep and what to bin, write the decisions down and let the script do the bookkeeping:
+
+```json
+{"round": 1, "beta": 0.5, "judge": "fresh agent", "decisions": [
+  {"key": "a|b|c", "verdict": "keep", "note": "worth a prototype"},
+  {"key": "d|e|f", "verdict": "kill", "reason": "incoherent", "pair": ["d", "e"]},
+  {"key": "g|h|i", "verdict": "kill", "reason": "obvious"}
+]}
+```
+
+```bash
+python3 -I scripts/rank_alien.py feedback input.json decisions.json --out next.json --ledger ledger.md
+```
+
+Kept ideas become corpus documents, `incoherent` kills put the pair on the blacklist, `obvious` kills extend the baseline, and `off-brief` just goes in the ledger. The output file starts the next round with the scores cleared. If the same kill reason shows up three rounds running, the script says so, because that usually means the rubric or the atoms are wrong.
+
 ## Limitations
 
 - The paper trained models on 16,068 machine learning papers. This trains nothing. Counts stand in for the availability model, and a written rubric stands in for the coherence model.
@@ -107,10 +125,12 @@ Triples that already exist in the corpus are dropped, and so is anything scored 
 ```text
 SKILL.md                      the procedure Claude follows
 scripts/rank_alien.py         pool, rank, selftest (stdlib only)
-evals/probe_ranker.py         41 checks on the script
+evals/probe_ranker.py         64 checks on the script
 references/example-input.json
 references/method-notes.md    what comes from the paper and what doesn't
 references/evals.md           behavioural evals
 LICENSE                       MIT
+CHANGELOG.md
+.github/workflows/test.yml    runs the checks on push
 README.md, description.md
 ```

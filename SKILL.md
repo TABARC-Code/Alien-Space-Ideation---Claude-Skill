@@ -6,7 +6,7 @@ metadata:
   author_url: https://github.com/TABARC-Code/
   dewey_decimal_code: "153.350"
   classification_label: "Creative ideation and concept generation"
-  version: "1.2.0"
+  version: "1.3.0"
 ---
 
 # Alien Space Ideation
@@ -43,15 +43,17 @@ Mine, and unvalidated: counting corpus co-occurrence as the availability proxy, 
 
 Every gate that fails goes in the report in plain words. A blank beats a made-up score.
 
-The script is required above 12 atoms: 25 atoms already make 2,300 triples. If `scripts/` is missing, get it from the repo. Failing that, cap the vocabulary at 12 atoms (220 triples), count by hand, and say so in the report. Ties at beta 0 break alphabetically, so a shift between equal-coherence ideas is availability doing its job, not a finding.
+The script is required above 12 atoms: 25 atoms already make 2,300 triples. If `scripts/` is missing, get it from the repo. Failing that, cap the vocabulary at 12 atoms (220 triples), count by hand, and say so in the report. Ties are settled by a fixed hash, not the alphabet, so a shift between equal-coherence ideas at beta 0 is availability doing its job, not a finding.
 
 ## Feedback loops
 
-Positive: a kept idea goes into `docs` as a new entry, so its triple stops being alien and its pairs gain precedent for the next round.
+Record each round's decisions in a small JSON file and run `python3 -I scripts/rank_alien.py feedback input.json decisions.json --out next.json --ledger ledger.md` (format in the script header). The script does the bookkeeping, so nobody hand-edits the input.
 
-Negative: a kill for `incoherent` adds the offending pair to `blacklist` (the script then refuses it in both modes until the user lifts it). A kill for `obvious` appends the triple's atoms to `baseline` as a new list. A kill for `off-brief` goes into step 0's framing.
+Positive: a kept idea becomes a `docs` entry, so its triple stops being alien and its pairs gain precedent for the next round.
 
-Skills keep improving by these loops. After each round, append to `ledger.md`: round, beta, kept, killed with reasons, rubric changes. If the same kill reason shows up three rounds running, the rubric or the atoms are wrong, not the user.
+Negative: a kill for `incoherent` names the offending pair and puts it on the `blacklist`, which both modes then refuse until the user lifts it. A kill for `obvious` appends the triple's atoms to `baseline`. A kill for `off-brief` goes in the ledger and into step 0's framing.
+
+Skills keep improving by these loops. The ledger records round, beta, judge, kept, kills with reasons, and rubric changes. The script warns if the same kill reason turns up three rounds running, because then the rubric or the atoms are wrong, not the user.
 
 ## Information flow, both ways
 
@@ -77,4 +79,4 @@ Takes in: other skills' outputs as corpus (finished designs, skill lists, notes)
 | The strangest triples never reach the pool | Missed Trigger (by design) | default needs two pairs with precedent; `--min-pairs-seen 1` widens it, at a cost in noise |
 | Overclaiming the paper's results | Hallucination | Honest scope; `references/method-notes.md` |
 
-Tests: `python3 -I evals/probe_ranker.py` (41 checks on the script) and `references/evals.md` (10 behavioural evals; two exercised in a real round, none formally scored). Quick check: `python3 -I scripts/rank_alien.py selftest`.
+Tests: `python3 -I evals/probe_ranker.py` (64 checks on the script) and `references/evals.md` (10 behavioural evals; two exercised in a real round, none formally scored). Quick check: `python3 -I scripts/rank_alien.py selftest`.

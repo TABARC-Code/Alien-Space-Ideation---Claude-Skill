@@ -37,7 +37,9 @@ Keep the idea, drop the training.
 
 **Theme groups.** Single atoms can be spread evenly while one theme still takes four of the top five places. That's what happened in the first real round. Optional `groups` let the script flag it.
 
-**Feedback goes back into the input.** A kept idea becomes a new corpus document. A rejected pair goes on the blacklist. An obvious idea adds to the baseline. Each round starts from a slightly different map.
+**Feedback goes back into the input, and the script does it.** A kept idea becomes a new corpus document. A rejected pair goes on the blacklist. An obvious idea adds to the baseline. Each round starts from a slightly different map. This used to be hand-edited JSON, which is exactly where mistakes creep in, so it's a command now, and it logs each round once.
+
+**Ties go by a hash, not the alphabet.** Plenty of triples score identically, and breaking those ties alphabetically meant atoms near the start of the alphabet won every coin flip. A fixed hash is just as repeatable and has no favourites. This was a bug in the first published version.
 
 ## Trust and boundaries
 
@@ -45,7 +47,7 @@ Everything is local. The script reads one JSON file, writes to stdout, and makes
 
 ## Current state
 
-v1.2.0. Working and checked: the pool, rank and selftest modes, validation, blacklist, unanchored cap, source coverage, log scaling, and the collapse, coherence and precedent diagnostics. All 41 checks in `evals/probe_ranker.py` pass.
+v1.3.0. Working and checked: the pool, rank and selftest modes, validation, blacklist, unanchored cap, source coverage, log scaling, and the collapse, coherence and precedent diagnostics. All 64 checks in `evals/probe_ranker.py` pass.
 
 One real round has run, on a corpus of installed skills. It found and fixed the precedent bias, and it produced five proposals with tests and kill conditions.
 

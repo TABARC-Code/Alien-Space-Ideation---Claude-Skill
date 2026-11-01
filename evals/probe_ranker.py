@@ -40,8 +40,11 @@ def parse(out):
     return j["ranked"] if isinstance(j, dict) and "ranked" in j else j
 
 
-def clean_reject(rc, err):
-    return rc == 2 and "Traceback" not in err and err.strip() != ""
+def clean_reject(rc, err, needle=None):
+    """A clean refusal: exit 2, no traceback, a message. With `needle`, the
+    message must also name the cause, so a check can't pass for the wrong reason."""
+    ok = rc == 2 and "Traceback" not in err and err.strip() != ""
+    return ok and (needle is None or needle.lower() in err.lower())
 
 
 def check(name, ok):
@@ -196,6 +199,133 @@ cg = json.loads(out)["diagnostics"].get("collapse_groups") if rc == 0 else None
 check("flags_theme_group_collapse", cg == ["dice-games"])
 rc, _, err = run("rank", with_coh({T1: 3}, groups={"x": ["not-an-atom"]}))
 check("reject_group_with_unknown_atom", clean_reject(rc, err))
+
+# --- feedback mode ----------------------------------------------------------
+def run_fb(data, decisions, args=(), ledger_text=None, pass_out=True):
+    """Run `feedback` in a scratch folder. Returns (rc, stdout, stderr, files)."""
+    with tempfile.TemporaryDirectory() as d:
+        ip, dp, op, lp = (os.path.join(d, n) for n in
+                          ("in.json", "dec.json", "out.json", "ledger.md"))
+        with open(ip, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        with open(dp, "w", encoding="utf-8") as f:
+            json.dump(decisions, f)
+        if ledger_text is not None:
+            with open(lp, "w", encoding="utf-8") as f:
+                f.write(ledger_text)
+        cmd = [sys.executable, "-I", SCRIPT, "feedback", ip, dp, "--ledger", lp, *args]
+        if pass_out:
+            cmd += ["--out", op]
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        files = {}
+        for name, path in (("out", op), ("in", ip), ("ledger", lp)):
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    files[name] = f.read()
+        return p.returncode, p.stdout, p.stderr, files
+
+
+def dec(*items, rnd=1, **extra):
+    return {"round": rnd, "decisions": list(items), **extra}
+
+
+SCORED = with_coh({T1: 3, T2: 2, T3: 3})
+rc, _, _, f = run_fb(SCORED, dec({"key": T1, "verdict": "keep"}))
+nxt = json.loads(f["out"]) if rc == 0 else {}
+rc2, out2, _ = run("pool", nxt, ["--n", "120", "--reveal", "--controls", "0"]) if nxt else (1, "", "")
+rc0, out0, _ = run("pool", SCORED, ["--n", "120", "--reveal", "--controls", "0"])
+check("fb_keep_adds_corpus_doc_so_triple_is_made",
+      rc == 0 and rc0 == 0 and rc2 == 0
+      and T1 in {r["key"] for r in parse(out0)}
+      and T1 not in {r["key"] for r in parse(out2)}
+      and any(k.startswith("kept_r1_") for k in nxt.get("docs", {})))
+check("fb_clears_scores_for_next_round", rc == 0 and nxt.get("coherence") == {})
+check("fb_leaves_input_untouched_with_out", rc == 0 and json.loads(f["in"]) == SCORED)
+
+rc, _, _, f = run_fb(SCORED, dec({"key": T2, "verdict": "kill", "reason": "incoherent",
+                                  "pair": ["dice-pool", "push-your-luck"]}))
+nxt = json.loads(f["out"]) if rc == 0 else {}
+rcp, outp, _ = run("pool", nxt, ["--n", "120", "--controls", "0"]) if nxt else (1, "", "")
+check("fb_incoherent_blacklists_the_pair",
+      rc == 0 and ["dice-pool", "push-your-luck"] in nxt.get("blacklist", [])
+      and rcp == 0 and all(not {"dice-pool", "push-your-luck"} <= set(r["triple"])
+                           for r in parse(outp)))
+
+rc, _, _, f = run_fb(SCORED, dec({"key": T3, "verdict": "kill", "reason": "obvious"}))
+nxt = json.loads(f["out"]) if rc == 0 else {}
+check("fb_obvious_extends_baseline",
+      rc == 0 and sorted(T3.split("|")) in [sorted(b) for b in nxt.get("baseline", [])])
+
+rc, _, _, f = run_fb(SCORED, dec({"key": T3, "verdict": "kill", "reason": "off-brief"}))
+nxt = json.loads(f["out"]) if rc == 0 else {}
+check("fb_off_brief_only_logs",
+      rc == 0 and nxt.get("docs") == SCORED["docs"] and nxt.get("baseline") == SCORED["baseline"]
+      and nxt.get("blacklist", []) == SCORED.get("blacklist", []))
+
+rc, _, err, _ = run_fb(SCORED, dec({"key": T1, "verdict": "keep"}), pass_out=False)
+check("fb_requires_out_or_in_place", clean_reject(rc, err, "--out"))
+with tempfile.TemporaryDirectory() as d:
+    ip = os.path.join(d, "in.json")
+    dp = os.path.join(d, "dec.json")
+    json.dump(SCORED, open(ip, "w"))
+    json.dump(dec({"key": T1, "verdict": "keep"}), open(dp, "w"))
+    p = subprocess.run([sys.executable, "-I", SCRIPT, "feedback", ip, dp, "--out", ip],
+                       capture_output=True, text=True)
+    check("fb_refuses_out_equal_to_input", clean_reject(p.returncode, p.stderr, "in-place"))
+    p = subprocess.run([sys.executable, "-I", SCRIPT, "feedback", ip, dp, "--in-place"],
+                       capture_output=True, text=True)
+    after = json.load(open(ip))
+    check("fb_in_place_overwrites", p.returncode == 0 and after["coherence"] == {}
+          and any(k.startswith("kept_r1_") for k in after["docs"]))
+
+rc, _, err, _ = run_fb(SCORED, dec({"key": "area-control|dice-pool|drafting", "verdict": "keep"}))
+check("fb_rejects_unscored_key", clean_reject(rc, err, "scored"))
+rc, _, err, _ = run_fb(SCORED, dec({"key": T1, "verdict": "kill"}))
+check("fb_kill_needs_reason", clean_reject(rc, err, "needs a reason"))
+rc, _, err, _ = run_fb(SCORED, dec({"key": T1, "verdict": "kill", "reason": "incoherent"}))
+check("fb_incoherent_needs_pair", clean_reject(rc, err, "pair"))
+rc, _, err, _ = run_fb(SCORED, dec({"key": T1, "verdict": "kill", "reason": "incoherent",
+                                    "pair": ["dice-pool", "drafting"]}))
+check("fb_pair_must_come_from_the_triple", clean_reject(rc, err, "from the triple"))
+rc, _, err, _ = run_fb(SCORED, dec({"key": T1, "verdict": "keep"}, {"key": T1, "verdict": "keep"}))
+check("fb_rejects_duplicate_decision", clean_reject(rc, err, "twice"))
+rc, _, err, _ = run_fb(SCORED, dec({"key": T1, "verdict": "keep"}, rnd=0))
+check("fb_rejects_bad_round", clean_reject(rc, err, "round"))
+rc, _, err, _ = run_fb(SCORED, dec({"key": T1, "verdict": "maybe"}))
+check("fb_rejects_unknown_verdict", clean_reject(rc, err, "verdict"))
+
+rc, out, err, f = run_fb(SCORED, dec({"key": T1, "verdict": "keep", "note": "worth a prototype"},
+                                     {"key": T3, "verdict": "kill", "reason": "obvious"},
+                                     rnd=2, beta=0.5, judge="fresh agent"))
+led = f.get("ledger", "")
+check("fb_writes_ledger_section",
+      rc == 0 and "## Round 2" in led and "Kept: 1. Killed: 1." in led
+      and "Reasons: obvious=1" in led and "worth a prototype" in led)
+check("fb_warns_about_undecided_scores", rc == 0 and "no decision" in err)
+rc, _, err, _ = run_fb(SCORED, dec({"key": T1, "verdict": "keep"}, rnd=2), ledger_text=led)
+check("fb_logs_each_round_once", clean_reject(rc, err, "Round 2"))
+
+hist = ("# Ledger\n\n## Round 1\nKept: 0. Killed: 1.\nReasons: incoherent=1\n\n"
+        "## Round 2\nKept: 1. Killed: 1.\nReasons: incoherent=1\n")
+rc, _, err, _ = run_fb(SCORED, dec({"key": T2, "verdict": "kill", "reason": "incoherent",
+                                    "pair": ["dice-pool", "push-your-luck"]}, rnd=3),
+                       ledger_text=hist)
+check("fb_warns_on_same_reason_three_rounds_running",
+      rc == 0 and "three rounds running" in err and "incoherent" in err)
+rc, _, err, _ = run_fb(SCORED, dec({"key": T3, "verdict": "kill", "reason": "obvious"}, rnd=3),
+                       ledger_text=hist)
+check("fb_no_false_three_round_warning", rc == 0 and "three rounds running" not in err)
+
+# --- ties are settled by a fixed hash, not by the alphabet ----------------
+tied = {"atoms": list("abcdefgh"),
+        "docs": {f"p{i}": [x, y] for i, (x, y) in enumerate(
+            __import__("itertools").combinations("abcdefgh", 2))}}
+rc, out, _ = run("pool", tied, ["--n", "5", "--controls", "0"])
+picked = sorted(r["key"] for r in parse(out)) if rc == 0 else []
+alpha_first = ["a|b|c", "a|b|d", "a|b|e", "a|b|f", "a|b|g"]
+check("ties_not_settled_alphabetically", len(picked) == 5 and picked != alpha_first)
+rc, out2, _ = run("pool", tied, ["--n", "5", "--controls", "0"])
+check("tie_break_is_deterministic", rc == 0 and out == out2)
 
 # --- behaviour that must not regress --------------------------------------
 rc, out, _ = run("pool", BASE, ["--n", "60"])
